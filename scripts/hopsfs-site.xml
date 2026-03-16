@@ -20,10 +20,10 @@
 
 <!-- *************  Create Test Data ************* -->
 
-<!-- <property> -->
-   <!-- <name>create.test.data</name> -->
-   <!-- <value>true</value> -->
-<!-- </property> -->
+<property>
+   <name>create.test.data</name>
+   <value>true</value>
+</property>
 
 <!-- *************  Cloud Storage ************* -->
 <!-- ***** NOTE. For minio there is *********** -->
@@ -61,6 +61,11 @@
    <description>Endpoint. Needed for minio</description>
 </property>
 
+<property>
+   <name>dfs.cloud.store.small.files.in.db</name>
+   <value>false</value>
+   <description>Do not store small files in the DB</description>
+</property>
 
 <!-- *************  SSL ************* -->
 <!-- <property> -->
@@ -75,5 +80,42 @@
    <!-- <value>true</value> -->
    <!-- <description>Enable/Disable KMS</description> -->
 <!-- </property> -->
+
+<!-- ************* Audit ************* -->
+<property>
+   <name>dfs.namenode.audit.log.stat.operation</name>
+   <value>false</value>
+   <description>Disable audit logging for stat (getFileInfo) operations (matches production default)</description>
+</property>
+
+<!-- ************* Other ************* -->
+<property>
+   <name>dfs.blocksize</name>
+   <value>134217728</value>
+   <description>1048576 is 1 MB. 134217728 is 128 MB</description>
+</property>
+<property>
+   <name>dfs.namenode.file.close.num-committed-allowed</name>
+   <value>1</value>
+   <description></description>
+</property>
+<property> 
+   <name>fs.permissions.umask-mode</name>
+   <value>0007</value>
+   <description></description>
+</property>
+
+<!-- *** Additional User and Group ** -->
+<property>
+   <name>hopsfs.additional.user</name>
+   <value>testuser</value>
+   <description></description>
+</property>
+<property>
+   <name>hopsfs.additional.group</name>
+   <value>testuser</value>
+   <description></description>
+</property>
+
 
 </configuration>

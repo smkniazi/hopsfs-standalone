@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
-BUCKET_SIZE_IN_MB=256
+BUCKET_SIZE_IN_MB=0
 
 if [ "$BUCKET_SIZE_IN_MB" -ne 0 ]; then
   # Create limited sized bucket with mounted image

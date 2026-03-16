@@ -253,6 +253,19 @@ public class Main extends HopsSSLTestUtils {
         dfs.setStoragePolicy(new Path("/"), "HOT");
       }
 
+      // ----------------------------------Create additional user and group -------------------------
+      String addUser = conf.get("hopsfs.additional.user", "");
+      String addGroup = conf.get("hopsfs.additional.group", "");
+      if (addUser != null && !addUser.isEmpty() && addGroup != null && !addGroup.isEmpty()) {
+        try {
+          dfs.addUser(addUser);
+          dfs.addGroup(addGroup);
+          dfs.addUserToGroup(addUser, addGroup);
+          System.out.println("Added user '" + addUser + "' to group '" + addGroup + "'");
+        } catch (Exception e) {
+          System.err.println("Warning: Failed to add user/group: " + e.getMessage());
+        }
+      }
 
       // ----------------------------------Create sample data---------------------------------------
       if (conf.getBoolean("create.test.data", false)) {
