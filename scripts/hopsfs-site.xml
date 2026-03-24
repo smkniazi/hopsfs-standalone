@@ -118,4 +118,9 @@
 </property>
 
 
+<property>
+   <name>dfs.namenode.enable.retrycache</name>
+   <value>true</value>
+   <description></description>
+</property>
 </configuration>

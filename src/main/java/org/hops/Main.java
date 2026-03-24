@@ -291,6 +291,12 @@ public class Main extends HopsSSLTestUtils {
         IOUtils.copyBytes(in, out, 1024);
         in.close();
         out.close();
+
+        // Create a folder only accessible by testuser (if configured)
+        if (addUser != null && !addUser.isEmpty()) {
+          dfs.mkdirs(new Path("/_test/testuser_only"), new FsPermission(0700));
+          dfs.setOwner(new Path("/_test/testuser_only"), addUser, addGroup);
+        }
       }
 
       dfs.close();
