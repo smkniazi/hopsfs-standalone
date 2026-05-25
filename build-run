@@ -1,0 +1,15 @@
+set -e
+pushd . 
+cd ${HOME}/code/hops/hops/hadoop-hdfs-project
+export JAVA_HOME="${HOME}/usr/bin/jdk_for_hadoop";
+export PATH="${HOME}/usr/bin/protocol_buffer_all_versions/protoc_for_hadoop/src:$PATH" 
+
+#mvn install generate-sources -DskipTests -o -DskipShade -Danimal.sniffer.skip
+#mvn test-compile  -o
+
+
+popd
+rm -rf targe
+mvn clean package install -o
+./scripts/run --num-datanodes=3 --num-namenodes=2
+
