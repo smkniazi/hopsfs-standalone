@@ -91,6 +91,41 @@ behavior.
 The socket binds to `127.0.0.1` only — not reachable from outside the
 host. It's intended for local development and testing.
 
+### Helper scripts
+
+Three wrappers under `scripts/` save you the typing:
+
+| Script | Purpose |
+|---|---|
+| `scripts/hopsfs-ctl.sh` | Interactive launcher. Prints a usage banner with all supported commands, then exec's `nc localhost 7777`. Use this for ad-hoc `kill`/`start`/`list`. |
+| `scripts/hopsfs-churn-dn.sh [interval-secs] [dn-idx]` | Periodic DataNode churn loop. Defaults: 60 s phases, DN 0. Cycles `kill dn` → sleep → `start dn` → sleep. When async cloud upload is on, the runner drains the DN before stopping it. |
+| `scripts/hopsfs-churn-nn.sh [interval-secs] [nn-idx]` | Periodic NameNode churn loop. Defaults: 60 s phases, NN 0. Same shape as the DN variant; no drain step (drain is DN-only). |
+
+Each script prints a detailed banner — target host/port, what the loop
+does, prerequisites, env overrides — before doing anything network. All
+three honor `HOPSFS_CTL_HOST` and `HOPSFS_CTL_PORT` so you can point
+them at a non-default port.
+
+Examples:
+
+```bash
+# Interactive
+./scripts/hopsfs-ctl.sh
+
+# DN0 dies every 60 s for 60 s, then comes back; repeat forever
+./scripts/hopsfs-churn-dn.sh
+
+# 30-second phases, target DN1
+./scripts/hopsfs-churn-dn.sh 30 1
+
+# NN1 churn at 30-second phases
+./scripts/hopsfs-churn-nn.sh 30 1
+```
+
+For NN churn you need `--num-namenodes >= 2` so clients can fail over;
+for DN churn you need `--num-datanodes >= 2` so writes can still find a
+healthy target while the churned DN is down.
+
 ## NDB Configuration
 
 The `--ndb-config` option specifies a filename that is loaded from the classpath. To use a custom NDB configuration file, add the directory containing your config file to the classpath:
