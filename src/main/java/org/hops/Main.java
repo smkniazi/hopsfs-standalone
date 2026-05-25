@@ -8,6 +8,8 @@ import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.*;
 import org.apache.hadoop.hdfs.client.HdfsAdmin;
+import org.apache.hadoop.hdfs.protocol.DrainStatus;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.cloud.CloudPersistenceProvider;
 import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.cloud.CloudPersistenceProviderFactory;
 import org.apache.hadoop.io.IOUtils;
@@ -15,6 +17,12 @@ import org.apache.hadoop.security.ssl.HopsSSLTestUtils;
 import org.junit.Assert;
 
 import java.io.*;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.apache.hadoop.hdfs.DFSConfigKeys.*;
@@ -28,6 +36,9 @@ public class Main extends HopsSSLTestUtils {
     String confDir = "/tmp/hopsfs-conf";
     String ndbConfigFile = "ndb-config.properties";  // Default: bundled resource
     String dfsBaseDir = "/tmp/hopsfs-data";  // Default: temporary directory
+    // Loopback control socket for kill/start commands. 0 = disabled.
+    // Talk to it from another terminal with `nc localhost <port>`.
+    int ctlPort = 7777;
   }
 
   private static ClusterConfig parseCommandLineArgs(String[] args) {
@@ -70,6 +81,12 @@ public class Main extends HopsSSLTestUtils {
         }
       } else if (args[i].startsWith("--dfs-base-dir=")) {
         config.dfsBaseDir = args[i].substring("--dfs-base-dir=".length());
+      } else if (args[i].equals("--ctl-port")) {
+        if (i + 1 < args.length) {
+          config.ctlPort = Integer.parseInt(args[++i]);
+        }
+      } else if (args[i].startsWith("--ctl-port=")) {
+        config.ctlPort = Integer.parseInt(args[i].substring("--ctl-port=".length()));
       } else if (args[i].equals("--help") || args[i].equals("-h")) {
         printUsage();
         System.exit(0);
@@ -90,6 +107,8 @@ public class Main extends HopsSSLTestUtils {
     System.out.println("  --conf-dir=PATH         Configuration output directory (default: /tmp/hopsfs-conf)");
     System.out.println("  --ndb-config=FILENAME   NDB configuration fileneme (default: " + "ndb-config.properties)");
     System.out.println("  --dfs-base-dir=PATH     DFS data directory (default: /tmp/hopsfs-data)");
+    System.out.println("  --ctl-port=N            Loopback control socket port (default: 7777; 0 to disable).");
+    System.out.println("                          Drive interactively: nc localhost <port>");
     System.out.println("  -h, --help              Show this help message");
     System.out.println();
     System.out.println("System Properties:");
@@ -124,6 +143,10 @@ public class Main extends HopsSSLTestUtils {
       System.err.println("Number of DataNodes must be at least 1");
       System.exit(1);
     }
+    if (config.ctlPort < 0 || config.ctlPort > 65535) {
+      System.err.println("--ctl-port must be in [0, 65535]");
+      System.exit(1);
+    }
 
     final int NUM_DN = config.numDataNodes;
     final int NAMENODE_PORT = config.nameNodePort;
@@ -137,6 +160,8 @@ public class Main extends HopsSSLTestUtils {
       System.out.println("  Configuration output directory: " + config.confDir);
       System.out.println("  NDB config file: " + config.ndbConfigFile);
       System.out.println("  DFS base directory: " + config.dfsBaseDir);
+      System.out.println("  Control socket: "
+          + (config.ctlPort > 0 ? "127.0.0.1:" + config.ctlPort : "disabled"));
 
       Configuration conf = new HdfsConfiguration();
       conf.addResource("hopsfs-site.xml");
@@ -215,6 +240,18 @@ public class Main extends HopsSSLTestUtils {
       conf.set("hadoop.proxyuser." + currentUser + ".hosts", "*");
       conf.set("hadoop.proxyuser." + currentUser + ".groups", "*");
 
+      // ----------------------------------Fast DN dead detection for ctl-driven kills--------------
+      // When the control socket is on, operators will be killing DNs by
+      // hand and expect the NN to notice promptly. The default
+      // 10.5-minute dead-detection window (2 * recheck + 10 * heartbeat)
+      // makes that feel broken. Tighten to ~20 s:
+      //   dead = 2 * 5000 ms + 10 * 1 s = 20 s.
+      // Non-control runs keep stock Hadoop heartbeat behavior.
+      if (config.ctlPort > 0) {
+        conf.setLong(DFS_HEARTBEAT_INTERVAL_KEY, 1L);
+        conf.setInt(DFS_NAMENODE_HEARTBEAT_RECHECK_INTERVAL_KEY, 5000);
+      }
+
       System.out.println("Building MiniDFSCluster...");
       MiniDFSCluster.Builder clusterBuilder = new MiniDFSCluster.Builder(conf)
               .numDataNodes(NUM_DN);
@@ -292,6 +329,26 @@ public class Main extends HopsSSLTestUtils {
         in.close();
         out.close();
 
+        // hopsfs-go-client integration tests connect as user "gohdfs1" and
+        // expect /_test/foo.txt and /_test/mobydick.txt to be readable by
+        // that user. Create the user/group and chown the fixtures so the
+        // Go test suite (which hardcodes "gohdfs1") can read them without
+        // permission errors.
+        final String goUser = "gohdfs1";
+        final String goGroup = "gohdfs1";
+        try {
+          dfs.addUser(goUser);
+          dfs.addGroup(goGroup);
+          dfs.addUserToGroup(goUser, goGroup);
+          System.out.println("Added user '" + goUser + "' to group '" + goGroup + "'");
+        } catch (Exception e) {
+          System.err.println("Warning: Failed to add gohdfs1 user/group: " + e.getMessage());
+        }
+        dfs.setOwner(new Path("/_test/foo.txt"), goUser, goGroup);
+        dfs.setOwner(new Path("/_test/mobydick.txt"), goUser, goGroup);
+        dfs.setPermission(new Path("/_test/foo.txt"), new FsPermission(0644));
+        dfs.setPermission(new Path("/_test/mobydick.txt"), new FsPermission(0644));
+
         // Create a folder only accessible by testuser (if configured)
         if (addUser != null && !addUser.isEmpty()) {
           dfs.mkdirs(new Path("/_test/testuser_only"), new FsPermission(0700));
@@ -309,6 +366,36 @@ public class Main extends HopsSSLTestUtils {
       System.out.println("HTTP address: " + cluster.getNameNode(0).getHttpAddress());
       System.out.println("Configuration written to: " + config.confDir);
       System.out.println("Cloud Enabled: " + cloudEnabled);
+      if (cloudEnabled) {
+        // Async cloud upload tunables (HOPSFS-345). Values are read from
+        // hopsfs-site.xml or fall back to the Java defaults.
+        boolean asyncEnabled = conf.getBoolean(
+            DFS_CLOUD_ASYNC_UPLOAD_ENABLED_KEY,
+            DFS_CLOUD_ASYNC_UPLOAD_ENABLED_DEFAULT);
+        System.out.println("  " + DFS_CLOUD_ASYNC_UPLOAD_ENABLED_KEY
+            + " = " + asyncEnabled);
+        if (asyncEnabled) {
+          System.out.println("  " + DFS_CLOUD_DN_ASYNC_UPLOAD_THREADS_KEY
+              + " = " + conf.getInt(DFS_CLOUD_DN_ASYNC_UPLOAD_THREADS_KEY,
+                  DFS_CLOUD_DN_ASYNC_UPLOAD_THREADS_DEFAULT));
+          System.out.println("  " + DFS_CLOUD_DN_ASYNC_UPLOAD_QUEUE_CAPACITY_KEY
+              + " = " + conf.getInt(DFS_CLOUD_DN_ASYNC_UPLOAD_QUEUE_CAPACITY_KEY,
+                  DFS_CLOUD_DN_ASYNC_UPLOAD_QUEUE_CAPACITY_DEFAULT));
+          System.out.println("  " + DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_COUNT_KEY
+              + " = " + conf.getInt(DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_COUNT_KEY,
+                  DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_COUNT_DEFAULT));
+          System.out.println("  " + DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_INTERVAL_MS_KEY
+              + " = " + conf.getLong(DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_INTERVAL_MS_KEY,
+                  DFS_CLOUD_DN_ASYNC_UPLOAD_RETRY_INTERVAL_MS_DEFAULT) + "ms");
+          // The cache-delete-activation percentage gates both the cache
+          // eviction trigger AND the async-upload sync-fallback gate after
+          // the HOPSFS-345 cleanup that dropped the redundant
+          // dfs.cloud.dn.async.upload.disk.threshold.percent key.
+          System.out.println("  " + DFS_DN_CLOUD_CACHE_DELETE_ACTIVATION_PRECENTAGE_KEY
+              + " = " + conf.getInt(DFS_DN_CLOUD_CACHE_DELETE_ACTIVATION_PRECENTAGE_KEY,
+                  DFS_DN_CLOUD_CACHE_DELETE_ACTIVATION_PRECENTAGE_DEFAULT) + "%");
+        }
+      }
       System.out.println("SSL Enabled: " + sslEnabled);
       if (sslEnabled) {
         System.out.println("SSL Crypt Dir: " + cryptoDir);
@@ -320,6 +407,8 @@ public class Main extends HopsSSLTestUtils {
       System.out.println("================================================================================");
       System.out.println("HopsFS cluster is running!");
       System.out.println("Press Ctrl+C to shutdown...");
+
+      startCtlServer(cluster, config);
 
       // Keep the cluster running
       Thread.sleep(Long.MAX_VALUE);
@@ -334,6 +423,207 @@ public class Main extends HopsSSLTestUtils {
         cluster.shutdown();
       }
     }
+  }
+
+  private static void startCtlServer(MiniDFSCluster cluster, ClusterConfig config) {
+    if (config.ctlPort <= 0) {
+      return;
+    }
+    final ServerSocket ss;
+    try {
+      ss = new ServerSocket(config.ctlPort, 0, InetAddress.getLoopbackAddress());
+    } catch (IOException e) {
+      System.err.println("[CTL] Failed to bind control socket on port "
+          + config.ctlPort + ": " + e.getMessage());
+      return;
+    }
+    final Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns = new HashMap<>();
+    Thread t = new Thread(() -> acceptLoop(ss, cluster, stoppedDns), "hopsfs-ctl");
+    t.setDaemon(true);
+    t.start();
+    System.out.println("[CTL] Control socket listening on 127.0.0.1:"
+        + ss.getLocalPort() + ". From another terminal: nc localhost "
+        + ss.getLocalPort());
+  }
+
+  private static void acceptLoop(ServerSocket ss, MiniDFSCluster cluster,
+                                 Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns) {
+    while (!Thread.currentThread().isInterrupted()) {
+      try (Socket client = ss.accept();
+           BufferedReader in = new BufferedReader(
+               new InputStreamReader(client.getInputStream()));
+           PrintWriter out = new PrintWriter(client.getOutputStream(), true)) {
+        out.println("hopsfs-ctl ready. Type 'help'.");
+        String line;
+        while ((line = in.readLine()) != null) {
+          String trimmed = line.trim();
+          if (trimmed.isEmpty()) {
+            continue;
+          }
+          if (trimmed.equalsIgnoreCase("quit") || trimmed.equalsIgnoreCase("exit")) {
+            out.println("bye");
+            break;
+          }
+          try {
+            out.println(handleCtlCommand(cluster, trimmed, stoppedDns));
+          } catch (Exception e) {
+            out.println("ERROR: " + e.getMessage());
+          }
+        }
+      } catch (IOException e) {
+        // Per-connection failure; loop and accept again.
+      }
+    }
+  }
+
+  private static String handleCtlCommand(MiniDFSCluster cluster, String line,
+      Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns) throws IOException {
+    String[] p = line.split("\\s+");
+    String cmd = p[0].toLowerCase();
+    switch (cmd) {
+      case "help":
+        return helpText();
+      case "list":
+        return listText(cluster, stoppedDns);
+      case "kill":
+      case "stop":
+        return doKill(cluster, p, stoppedDns);
+      case "start":
+      case "restart":
+        return doStart(cluster, p, stoppedDns);
+      default:
+        return "ERROR: unknown command '" + cmd + "'. Type 'help'.";
+    }
+  }
+
+  private static String doKill(MiniDFSCluster cluster, String[] p,
+      Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns) throws IOException {
+    if (p.length != 3) {
+      return "ERROR: usage: kill {dn|nn} <idx>";
+    }
+    String role = p[1].toLowerCase();
+    int idx;
+    try {
+      idx = Integer.parseInt(p[2]);
+    } catch (NumberFormatException nfe) {
+      return "ERROR: idx must be an integer";
+    }
+    switch (role) {
+      case "dn":
+      case "datanode": {
+        if (stoppedDns.containsKey(idx)) {
+          return "DN " + idx + " is already stopped";
+        }
+        List<DataNode> dns = cluster.getDataNodes();
+        if (idx < 0 || idx >= dns.size()) {
+          return "ERROR: no DN at index " + idx;
+        }
+        DataNode dn = dns.get(idx);
+        StringBuilder out = new StringBuilder();
+        // When async cloud upload is on, drain pending uploads first so
+        // the DN gets the same graceful-shutdown treatment the Helm
+        // preStop hook applies in production.
+        boolean asyncEnabled = dn.getConf().getBoolean(
+            DFS_CLOUD_ASYNC_UPLOAD_ENABLED_KEY,
+            DFS_CLOUD_ASYNC_UPLOAD_ENABLED_DEFAULT);
+        if (asyncEnabled) {
+          out.append("Async upload on; draining DN ").append(idx).append("...\n");
+          System.out.println("[CTL] Draining DN " + idx + "...");
+          try {
+            DrainStatus status = dn.drainAndSuspend(600L);
+            out.append("Drain: ").append(status).append("\n");
+            System.out.println("[CTL] DN " + idx + " drain: " + status);
+          } catch (Exception e) {
+            out.append("Drain failed: ").append(e.getMessage())
+                .append(" (proceeding with stop)\n");
+            System.err.println("[CTL] DN " + idx + " drain failed: " + e.getMessage());
+          }
+        }
+        MiniDFSCluster.DataNodeProperties props = cluster.stopDataNode(idx);
+        if (props == null) {
+          return out.append("ERROR: stop returned null for index ").append(idx).toString();
+        }
+        stoppedDns.put(idx, props);
+        System.out.println("[CTL] DN " + idx + " stopped");
+        return out.append("DN ").append(idx).append(" stopped").toString();
+      }
+      case "nn":
+      case "namenode": {
+        cluster.shutdownNameNode(idx);
+        System.out.println("[CTL] NN " + idx + " stopped");
+        return "NN " + idx + " stopped";
+      }
+      default:
+        return "ERROR: unknown role '" + role + "' (use 'dn' or 'nn')";
+    }
+  }
+
+  private static String doStart(MiniDFSCluster cluster, String[] p,
+      Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns) throws IOException {
+    if (p.length != 3) {
+      return "ERROR: usage: start {dn|nn} <idx>";
+    }
+    String role = p[1].toLowerCase();
+    int idx;
+    try {
+      idx = Integer.parseInt(p[2]);
+    } catch (NumberFormatException nfe) {
+      return "ERROR: idx must be an integer";
+    }
+    switch (role) {
+      case "dn":
+      case "datanode": {
+        MiniDFSCluster.DataNodeProperties props = stoppedDns.remove(idx);
+        if (props == null) {
+          return "ERROR: DN " + idx + " is not in stopped state";
+        }
+        boolean ok = cluster.restartDataNode(props, false);
+        System.out.println("[CTL] DN " + idx + (ok ? " restarted" : " restart failed"));
+        return ok ? "DN " + idx + " restarted" : "ERROR: restart failed";
+      }
+      case "nn":
+      case "namenode": {
+        cluster.restartNameNode(idx, true);
+        System.out.println("[CTL] NN " + idx + " restarted");
+        return "NN " + idx + " restarted";
+      }
+      default:
+        return "ERROR: unknown role '" + role + "' (use 'dn' or 'nn')";
+    }
+  }
+
+  private static String listText(MiniDFSCluster cluster,
+      Map<Integer, MiniDFSCluster.DataNodeProperties> stoppedDns) {
+    StringBuilder sb = new StringBuilder();
+    int numNn = cluster.getNumNameNodes();
+    sb.append("NameNodes (").append(numNn).append("):\n");
+    for (int i = 0; i < numNn; i++) {
+      String addr;
+      try {
+        addr = cluster.getNameNode(i).getHostAndPort();
+      } catch (Exception e) {
+        addr = "(stopped)";
+      }
+      sb.append("  [").append(i).append("] ").append(addr).append("\n");
+    }
+    int numDnRunning = cluster.getDataNodes().size();
+    sb.append("DataNodes (").append(numDnRunning).append(" running");
+    if (!stoppedDns.isEmpty()) {
+      sb.append(", ").append(stoppedDns.size()).append(" stopped at indices ")
+          .append(stoppedDns.keySet());
+    }
+    sb.append(")");
+    return sb.toString();
+  }
+
+  private static String helpText() {
+    return String.join("\n",
+        "Commands:",
+        "  help                Show this help",
+        "  list                Show NN/DN status",
+        "  kill {dn|nn} <idx>  Stop a node (keeps DN data for later start)",
+        "  start {dn|nn} <idx> Start a previously stopped node",
+        "  quit                Close this connection (cluster keeps running)");
   }
 
   private static void writeHopsFSConfig(MiniDFSCluster cluster, String confDir) throws IOException {

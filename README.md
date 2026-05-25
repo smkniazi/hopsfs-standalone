@@ -44,8 +44,52 @@ java -jar target/hopsfs-standalone-1.0-SNAPSHOT.jar --num-datanodes=3 --namenode
   --conf-dir=PATH         Configuration output directory (default: /tmp/hopsfs-conf)
   --ndb-config=FILENAME   NDB configuration filename on classpath (default: ndb-config.properties)
   --dfs-base-dir=PATH     DFS data directory (default: /tmp/hopsfs-data)
+  --ctl-port=N            Loopback control socket port (default: 7777; 0 to disable)
   -h, --help              Show this help message
 ```
+
+### Interactive control socket (kill / start nodes by hand)
+
+By default the cluster opens a plain-text control socket on
+`127.0.0.1:7777`. Drive it from a separate terminal so the cluster's
+NN/DN log stream stays on its own console:
+
+```bash
+# Interactive session
+nc localhost 7777
+hopsfs-ctl ready. Type 'help'.
+help
+list
+kill dn 0
+start dn 0
+kill nn 1
+start nn 1
+quit
+
+# One-shot
+echo "list" | nc localhost 7777
+echo "kill dn 0" | nc localhost 7777
+```
+
+Commands:
+
+- `help` — show commands
+- `list` — show NN/DN status (which are running, which are stopped)
+- `kill {dn|nn} <idx>` — stop a node. DN stop preserves the data dir
+  and port info so `start dn <idx>` brings the same instance back.
+- `start {dn|nn} <idx>` — start a previously stopped node.
+- `quit` — close just this connection; the cluster keeps running.
+
+When the control socket is enabled (the default), the cluster overrides
+the heartbeat tunables so the NameNode expires a dead DataNode in
+~20 seconds (`dfs.heartbeat.interval=1s`,
+`dfs.namenode.heartbeat.recheck-interval=5000ms`). Without this you'd
+wait ~10.5 minutes after `kill dn` before the NN noticed. Pass
+`--ctl-port=0` to disable the socket and keep stock Hadoop heartbeat
+behavior.
+
+The socket binds to `127.0.0.1` only — not reachable from outside the
+host. It's intended for local development and testing.
 
 ## NDB Configuration
 
