@@ -55,16 +55,58 @@
    <description>Bucket region</description>
 </property>
 
-<property>
-   <name>dfs.cloud.aws.endpoint</name>
-   <value>http://localhost:9000</value>
-   <description>Endpoint. Needed for minio</description>
-</property>
+<!-- <property> -->
+   <!-- <name>dfs.cloud.aws.endpoint</name> -->
+   <!-- <value>http://localhost:9000</value> -->
+   <!-- <description>Endpoint. Needed for minio</description> -->
+<!-- </property> -->
 
 <property>
    <name>dfs.cloud.store.small.files.in.db</name>
    <value>false</value>
    <description>Do not store small files in the DB</description>
+</property>
+
+<!-- *************  Async Cloud Upload (HOPSFS-345) ************* -->
+<!-- Master switch for the async cloud upload write-back cache.    -->
+<!-- When true, finalized blocks land on local disk and a worker   -->
+<!-- pool uploads them to cloud in the background. Must match on   -->
+<!-- NameNode and DataNode. Set false for the original sync-only   -->
+<!-- behavior.                                                     -->
+
+<property>
+   <name>dfs.cloud.async.upload.enabled</name>
+   <value>true</value>
+   <description>Enable async cloud upload. Must match on NN and DN.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.threads</name>
+   <value>4</value>
+   <description>Async-upload worker pool size. Distinct from
+   dfs.dn.cloud.max.upload.threads (which is the cloud SDK's HTTP
+   transfer pool).</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.queue.capacity</name>
+   <value>1000</value>
+   <description>Bounded async-upload queue size; overflow triggers
+   sync fallback.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.retry.count</name>
+   <value>3</value>
+   <description>Retry attempts before re-enqueueing a failed upload
+   at the queue tail.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.retry.interval.ms</name>
+   <value>30000</value>
+   <description>Base backoff between retries in milliseconds
+   (exponential, capped at 5 minutes).</description>
 </property>
 
 <!-- *************  SSL ************* -->

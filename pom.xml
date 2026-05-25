@@ -12,7 +12,7 @@
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <hadoop.version>3.2.0.19-EE-SNAPSHOT</hadoop.version>
+        <hadoop.version>3.4.3.1-EE-SNAPSHOT</hadoop.version>
     </properties>
 
     <dependencies>
