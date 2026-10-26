@@ -36,3 +36,9 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# custom resources
+hopsfs.log
+scripts/minio-data
+minio.img
+

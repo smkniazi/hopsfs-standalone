@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+BUCKET_SIZE_IN_MB=0
+
+if [ "$BUCKET_SIZE_IN_MB" -ne 0 ]; then
+  # Create limited sized bucket with mounted image
+  sudo umount -f "$SCRIPT_DIR/minio-data" | true
+  sudo rm -rf "$SCRIPT_DIR/minio-data"
+  rm -f "$SCRIPT_DIR/minio.img"
+  mkdir -p "$SCRIPT_DIR/minio-data"
+  dd if=/dev/zero of="$SCRIPT_DIR/minio.img" bs=1M count=$BUCKET_SIZE_IN_MB
+  mkfs.ext4 "$SCRIPT_DIR/minio.img"
+  sudo mount -o loop "$SCRIPT_DIR/minio.img" "$SCRIPT_DIR/minio-data"
+
+  docker run --rm \
+    --name minio \
+    -v "$SCRIPT_DIR/minio-data":/data \
+    -p 0.0.0.0:9000:9000 \
+    -p 0.0.0.0:9001:9001 \
+    -e MINIO_ROOT_USER=minioadmin \
+    -e MINIO_ROOT_PASSWORD=minioadmin \
+    quay.io/minio/minio server /data --console-address ":9001"
+else
+  # No size limit - data stored internally in container
+  docker run --rm \
+    --name minio \
+    -p 0.0.0.0:9000:9000 \
+    -p 0.0.0.0:9001:9001 \
+    -e MINIO_ROOT_USER=minioadmin \
+    -e MINIO_ROOT_PASSWORD=minioadmin \
+    quay.io/minio/minio server /data --console-address ":9001"
+fi

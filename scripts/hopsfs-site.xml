@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License. See accompanying LICENSE file.
+-->
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<!-- *************  Block Access Tokens ************* -->
+
+<property>
+   <name>dfs.block.access.token.enable</name>
+   <value>true</value>
+   <description>Enforce block access tokens between clients and DataNodes,
+   independently of the cluster-wide default.</description>
+</property>
+
+<!-- *************  Create Test Data ************* -->
+
+<property>
+   <name>create.test.data</name>
+   <value>true</value>
+</property>
+
+<!-- *************  Cloud Storage ************* -->
+<!-- ***** NOTE. For minio there is *********** -->
+<!-- ***** AWS_ACCESS_KEY_ID  and ************* -->
+<!-- ***** AWS_SECRET_ACCESS_KEY set in the *** -->
+<!-- ***** run script. unset that if you want * -->
+<!-- ***** to user AWS ************************ -->
+
+<property>
+   <name>dfs.enable.cloud.persistence</name>
+   <value>true</value>
+</property>
+
+<property>
+   <name>dfs.cloud.provider</name>
+   <value>AWS</value>
+   <description>Cloud provider. Currently only AWS is supported</description>
+</property>
+
+<property>
+   <name>dfs.cloud.aws.s3.bucket</name>
+   <value>hopsfsstandalonecluster</value>
+   <description>Hopsfs S3 bucket used to store file system blocks</description>
+</property>
+
+<property>
+   <name>dfs.cloud.aws.s3.region</name>
+   <value>eu-north-1</value>
+   <description>Bucket region</description>
+</property>
+
+<!-- <property> -->
+   <!-- <name>dfs.cloud.aws.endpoint</name> -->
+   <!-- <value>http://localhost:9000</value> -->
+   <!-- <description>Endpoint. Needed for minio</description> -->
+<!-- </property> -->
+
+<property>
+   <name>dfs.cloud.store.small.files.in.db</name>
+   <value>false</value>
+   <description>Do not store small files in the DB</description>
+</property>
+
+<!-- *************  Async Cloud Upload (HOPSFS-345) ************* -->
+<!-- Master switch for the async cloud upload write-back cache.    -->
+<!-- When true, finalized blocks land on local disk and a worker   -->
+<!-- pool uploads them to cloud in the background. Must match on   -->
+<!-- NameNode and DataNode. Set false for the original sync-only   -->
+<!-- behavior.                                                     -->
+
+<property>
+   <name>dfs.cloud.async.upload.enabled</name>
+   <value>true</value>
+   <description>Enable async cloud upload. Must match on NN and DN.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.threads</name>
+   <value>4</value>
+   <description>Async-upload worker pool size. Distinct from
+   dfs.dn.cloud.max.upload.threads (which is the cloud SDK's HTTP
+   transfer pool). Set to 1 to drain the upload queue slowly so blocks
+   sit COMPLETE+cloud_upload_pending longer — widens the in-flight
+   window for the storm-repro hunt (rename-OVERWRITE/delete racing a
+   still-pending block).</description>
+</property>
+
+<!-- Force the ASYNC upload-queue path (not the disk-pressure sync     -->
+<!-- fallback) so threads=1 above actually creates a backed-up queue    -->
+<!-- of COMPLETE+pending blocks. On this near-full host disk the        -->
+<!-- default 80% would make enqueue() upload synchronously (no pending  -->
+<!-- window). Safe now that the DN-death lock bug (S3 PUT under the      -->
+<!-- dataset monitor) is fixed; this is test amplification, not a mask. -->
+<property>
+   <name>dfs.dn.cloud.cache.delete.activation.percentage</name>
+   <value>99</value>
+   <description>Disk utilization percentage to start cleaning blocks from DN Cloud cache</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.queue.capacity</name>
+   <value>1000</value>
+   <description>Bounded async-upload queue size; overflow triggers
+   sync fallback.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.retry.count</name>
+   <value>3</value>
+   <description>Retry attempts before re-enqueueing a failed upload
+   at the queue tail.</description>
+</property>
+
+<property>
+   <name>dfs.cloud.dn.async.upload.retry.interval.ms</name>
+   <value>30000</value>
+   <description>Base backoff between retries in milliseconds
+   (exponential, capped at 5 minutes).</description>
+</property>
+
+<!-- *************  SSL ************* -->
+<!-- <property> -->
+   <!-- <name>ipc.server.ssl.enabled</name> -->
+   <!-- <value>true</value> -->
+   <!-- <description>Enable/Disable SSL</description> -->
+<!-- </property> -->
+
+<!-- *************  KMS ************* -->
+<!-- <property> -->
+   <!-- <name>enable.kms</name> -->
+   <!-- <value>true</value> -->
+   <!-- <description>Enable/Disable KMS</description> -->
+<!-- </property> -->
+
+<!-- ************* Audit ************* -->
+<property>
+   <name>dfs.namenode.audit.log.stat.operation</name>
+   <value>false</value>
+   <description>Disable audit logging for stat (getFileInfo) operations (matches production default)</description>
+</property>
+
+<!-- ************* Other ************* -->
+<property>
+   <name>dfs.blocksize</name>
+   <value>134217728</value>
+   <description>1048576 is 1 MB. 134217728 is 128 MB</description>
+</property>
+<property>
+   <name>dfs.namenode.file.close.num-committed-allowed</name>
+   <value>1</value>
+   <description></description>
+</property>
+<property> 
+   <name>fs.permissions.umask-mode</name>
+   <value>0007</value>
+   <description></description>
+</property>
+
+<!-- *** Additional User and Group ** -->
+<property>
+   <name>hopsfs.additional.user</name>
+   <value>testuser</value>
+   <description></description>
+</property>
+<property>
+   <name>hopsfs.additional.group</name>
+   <value>testuser</value>
+   <description></description>
+</property>
+
+
+<property>
+   <name>dfs.namenode.enable.retrycache</name>
+   <value>true</value>
+   <description></description>
+</property>
+</configuration>

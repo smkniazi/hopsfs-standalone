@@ -1,0 +1,14 @@
+set -e
+pushd . 
+cd ${HOME}/code/hops/hops/hadoop-hdfs-project/hadoop-hdfs
+export JAVA_HOME="${HOME}/usr/bin/jdk_for_hadoop";
+export PATH="${HOME}/usr/bin/protocol_buffer_all_versions/protoc_for_hadoop/src:$PATH"
+
+mvn clean install -o -DskipTests -Dmaven.javadoc.skip=true -Drat.skip=true -DskipShade -Danimal.sniffer.skip
+
+
+popd
+rm -rf target
+mvn clean package install -o
+./scripts/run --num-datanodes=3 --num-namenodes=1
+

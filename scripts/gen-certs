@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Generates PEM certificates from JKS keystores for HopsFS clients.
+# Extracts private key, root CA, and client certificate from JKS files,
+# converts them to PEM format, and installs the root CA to the system trust store.
+#
+# Usage: ./gen-certs [CERTS_DIR]
+#   CERTS_DIR: Directory containing JKS keystores (default: /tmp/hopsfs/conf/certs)
+#
+set -e
+#set -x
+
+# CERTS_DIR can be passed as first argument or defaults to /tmp/hopsfs/conf/certs
+CERTS_DIR="${1:-/tmp/hopsfs/conf/certs}"
+
+cd "$CERTS_DIR"
+
+HADOOP_USERNAME=salman
+PEMS_DIR="$CERTS_DIR/pems"
+LEGACY="-legacy" # set it to "" if you are using older version of openssl. 
+
+TSTORE_FILE=$CERTS_DIR/${HADOOP_USERNAME}__tstore.jks
+KSTORE_FILE=$CERTS_DIR/${HADOOP_USERNAME}__kstore.jks
+KEY_FILE=$CERTS_DIR/${HADOOP_USERNAME}__passwd #cert.key 
+
+rm -rf $PEMS_DIR
+mkdir -p $PEMS_DIR
+KEY=$( cat ${KEY_FILE} )
+
+echo "key $KEY"
+
+keytool -importkeystore -srckeystore c_client.keystore.jks  -destkeystore $PEMS_DIR/${HADOOP_USERNAME}_client.p12        -srcstoretype jks        -deststoretype pkcs12 -srcstorepass $KEY -keypass $KEY -deststorepass $KEY 
+openssl pkcs12 -info -in $PEMS_DIR/${HADOOP_USERNAME}_client.p12 -nodes -nocerts -out $PEMS_DIR/${HADOOP_USERNAME}_private_key.pem  -passin pass:$KEY $LEGACY 
+
+keytool -importkeystore -srckeystore c_client.truststore.jks  -destkeystore $PEMS_DIR/${HADOOP_USERNAME}_ca.p12        -srcstoretype jks        -deststoretype pkcs12  -srcstorepass $KEY -keypass $KEY -deststorepass $KEY
+openssl pkcs12 -nokeys -in $PEMS_DIR/${HADOOP_USERNAME}_ca.p12 -out $PEMS_DIR/${HADOOP_USERNAME}_root_ca.pem $LEGACY -passin pass:$KEY 
+
+
+keytool -exportcert -alias c_client_alias -keystore c_client.keystore.jks -rfc -file $PEMS_DIR/${HADOOP_USERNAME}_certificate_bundle.pem -srcstorepass $KEY -keypass $KEY -deststorepass $KEY
+
+sudo cp $PEMS_DIR/${HADOOP_USERNAME}_root_ca.pem /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+openssl verify -CAfile /etc/pki/tls/certs/ca-bundle.crt $PEMS_DIR/${HADOOP_USERNAME}_root_ca.pem
+
+
+ln -s ${PEMS_DIR}/${HADOOP_USERNAME}_root_ca.pem  ${PEMS_DIR}/ca_chain.pem
+ln -s ${PEMS_DIR}/${HADOOP_USERNAME}_certificate_bundle.pem ${PEMS_DIR}/client_cert.pem
+ln -s ${PEMS_DIR}/${HADOOP_USERNAME}_private_key.pem ${PEMS_DIR}/client_key.pem
+
+readlink -f ${PEMS_DIR}/*

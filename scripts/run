@@ -1,0 +1,94 @@
+#!/bin/bash
+#set -x
+SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+PROJECT_DIR="$SCRIPT_DIR/.."
+cd "$PROJECT_DIR"
+
+# The server jars are built with JDK 17 (main repo, HOPSFS-375), so the
+# standalone runs on the same JDK 17 the hops build functions use.
+export JAVA_HOME="${HOME}/usr/bin/jdk_for_hadoop"
+export PATH="${JAVA_HOME}/bin:$PATH"
+JAVA="$JAVA_HOME/bin/java"
+
+# Require Java 17.
+JAVA_VERSION=$("$JAVA" -version 2>&1 | head -n1 | cut -d'"' -f2 | cut -d'.' -f1)
+if [ "$JAVA_VERSION" != "17" ]; then
+    echo "Error: JDK 17 required at $JAVA_HOME, found Java $JAVA_VERSION"
+    exit 1
+fi
+
+# JDK 17 closes JPMS packages that Hadoop reflects into (UGI, metrics, NN/DN
+# internals). Open them for the cluster JVM, mirroring hadoop-project/pom.xml's
+# extraJavaTestArgs. Without these, MiniDFSCluster startup fails with
+# InaccessibleObjectException on JDK 17.
+JPMS_OPENS="-XX:+IgnoreUnrecognizedVMOptions \
+--add-opens=java.base/java.io=ALL-UNNAMED \
+--add-opens=java.base/java.lang=ALL-UNNAMED \
+--add-opens=java.base/java.lang.reflect=ALL-UNNAMED \
+--add-opens=java.base/java.math=ALL-UNNAMED \
+--add-opens=java.base/java.net=ALL-UNNAMED \
+--add-opens=java.base/java.text=ALL-UNNAMED \
+--add-opens=java.base/java.util=ALL-UNNAMED \
+--add-opens=java.base/java.util.concurrent=ALL-UNNAMED \
+--add-opens=java.base/java.util.zip=ALL-UNNAMED \
+--add-opens=java.base/sun.security.util=ALL-UNNAMED \
+--add-opens=java.base/sun.security.x509=ALL-UNNAMED"
+
+# Directory containing ndb-config.properties and hopsfs-site.xml (added to classpath)
+HOPSFS_CONF_DIR="$SCRIPT_DIR"
+
+# Output directory for runtime data
+HOPSFS_OUTPUT_DIR=/tmp/hopsfs
+
+LOG_FILE="$PROJECT_DIR/hopsfs.log"
+
+rm -rf "$HOPSFS_OUTPUT_DIR"
+rm -f "$LOG_FILE"
+
+export AWS_JAVA_V1_DISABLE_DEPRECATION_ANNOUNCEMENT=true
+
+JAR_FILE="$PROJECT_DIR/target/hopsfs-standalone-1.0-SNAPSHOT.jar"
+if [ ! -f "$JAR_FILE" ]; then
+    echo "Error: JAR file not found: $JAR_FILE"
+    echo "Run 'mvn package' to build the project first."
+    exit 1
+fi
+
+# Run java in background, write to log file
+# ClusterJ loads libndbclient from java.library.path; mvn package unpacks the
+# platform's library into target/lib (DYLD_* variables would be stripped by macOS).
+"$JAVA" $JPMS_OPENS -Djava.library.path="$PROJECT_DIR/target/lib" -cp "$HOPSFS_CONF_DIR:$JAR_FILE" org.hops.Main \
+    --conf-dir="$HOPSFS_OUTPUT_DIR/conf" \
+    --dfs-base-dir="$HOPSFS_OUTPUT_DIR/data" \
+    --num-namenodes=1 \
+    --num-datanodes=1 \
+    "$@" \
+    > "$LOG_FILE" 2>&1 &
+
+JAVA_PID=$!
+
+# Tail the log file in background
+tail -f "$LOG_FILE" &
+TAIL_PID=$!
+
+# Trap SIGINT (Ctrl+C) and SIGTERM to kill java immediately
+trap "echo 'Killing HopsFS...'; kill -SIGKILL $JAVA_PID $TAIL_PID 2>/dev/null; exit 0" SIGINT SIGTERM
+
+# On Linux, wait for HopsFS to be ready and generate PEM certs if SSL is enabled
+if [ "$(uname)" = "Linux" ]; then
+    while ! grep -q "HopsFS cluster is running!" "$LOG_FILE" 2>/dev/null; do
+        sleep 1
+    done
+    if grep -q "SSL Enabled: true" "$LOG_FILE"; then
+        # Pause tail to allow gen-certs prompts (sudo) to be visible
+        kill $TAIL_PID 2>/dev/null
+        # gen-certs extracts private key, root CA, and client cert from JKS keystores
+        "$SCRIPT_DIR/gen-certs" "$HOPSFS_OUTPUT_DIR/conf/certs"
+        # Resume tailing
+        tail -f "$LOG_FILE" &
+        TAIL_PID=$!
+    fi
+fi
+
+# Wait for java process
+wait $JAVA_PID
